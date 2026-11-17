@@ -1,0 +1,26 @@
+{
+  "name": "bookbot",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "book:now": "bun src/index.ts --now",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "book:test": "bun src/index.ts --test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "playwright": "^1.65.1"
+  }
+}
