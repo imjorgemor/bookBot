@@ -9,6 +9,10 @@ const TIMEOUT = 15000;
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 // 00:00 opens today + 3 (Tue → Fri). We prep the night before, so +4 (Mon 23:55 → Fri).
 const DAYS_AHEAD = 4;
+// Book this long after 00:00, in case the club's clock is slightly behind ours
+const MIDNIGHT_BUFFER_MS = 250;
+// Madrid time to start logging in, close to midnight so the session doesn't sit idle too long
+const LOGIN_AT = "23:57:30";
 // Not needed to book: skip them to load pages faster
 const TRACKERS =
   /tiktok|facebook|google-analytics|googletagmanager|cloudflareinsights|cookieyes|fonts\.googleapis/;
@@ -42,22 +46,30 @@ async function book(hour: string, daysAhead = DAYS_AHEAD, dryRun = false) {
     await bookingsBtn.waitFor({ state: "visible", timeout: TIMEOUT });
     console.log(`Logged in: ${page.url()}`);
 
-    // Go to the booking site (this button carries the session over)
+    // Cookie banner on the booking site: accept it whenever it shows up (it can cover buttons)
+    await page.addLocatorHandler(page.locator("#btnCookiesTodas"), (btn) => btn.click());
+
+    // Go to the booking site (this button carries the session over).
+    // Handoff done = the sidebar's "Reserva de pista" menu exists (it's on every booking-site page).
     await bookingsBtn.click();
-    // Slowest step (session handoff to provis.es): give it extra time on Railway
-    await page.waitForSelector("#dateAACC", { timeout: TIMEOUT * 3 });
+    await page.locator("#liReservas").waitFor({ state: "attached", timeout: TIMEOUT * 3 });
+    // Padel page: don't wait for the full load (it can hang), only for the date field
     await page.goto(
       "https://clubmetropolitan.provis.es/Reservas/ActividadesLibresHorariosZonas?idActividadLibre=137&integration=False&publico=False&idtipoCliente=0",
-      { waitUntil: "domcontentloaded" },
+      { waitUntil: "commit" },
     );
+    const dateField = page.locator("#dateAALL");
+    await dateField.waitFor({ state: "visible", timeout: TIMEOUT * 2 });
     console.log("On booking paddle page");
 
-    // Cookies
-    await page.click("#btnCookiesSeleccionadas", { timeout: TIMEOUT });
-
-    // Date: today's cell + daysAhead
-    await page.click("#dateAALL", { timeout: TIMEOUT });
-    const dayCell = page.locator("td.day.today").locator(`xpath=following::td[${daysAhead}]`);
+    // Date: open the calendar. Its script may not be ready yet, so click until it shows.
+    const today = page.locator("td.day.today");
+    for (let i = 0; i < 15 && !(await today.isVisible()); i++) {
+      await dateField.click({ timeout: TIMEOUT });
+      await today.waitFor({ state: "visible", timeout: 2000 }).catch(() => {});
+    }
+    // Today's cell + daysAhead
+    const dayCell = today.locator(`xpath=following::td[${daysAhead}]`);
     const date = await dayCell.getAttribute("data-day", { timeout: TIMEOUT });
     await dayCell.click();
     await page.waitForSelector(".hour-collapse", { timeout: TIMEOUT });
@@ -89,14 +101,18 @@ async function book(hour: string, daysAhead = DAYS_AHEAD, dryRun = false) {
       return;
     }
 
-    // Wait for 00:00 (Madrid). If it's already past midnight, book now.
-    const [h, m, s] = new Date()
+    // Wait for 00:00 (Madrid) + buffer, to the millisecond. If it's already past midnight, book now.
+    const now = new Date();
+    const [h, m, s] = now
       .toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid" })
       .split(":")
       .map(Number);
-    const msToMidnight = h ? (24 * 3600 - (h * 3600 + m! * 60 + s!)) * 1000 + 100 : 0;
-    console.log(`Waiting ${Math.round(msToMidnight / 1000)}s until midnight Madrid`);
+    const msToMidnight = h
+      ? (24 * 3600 - (h * 3600 + m! * 60 + s!)) * 1000 - now.getMilliseconds() + MIDNIGHT_BUFFER_MS
+      : 0;
+    console.log(`Waiting ${(msToMidnight / 1000).toFixed(3)}s until midnight Madrid`);
     await Bun.sleep(msToMidnight);
+    console.log(`Booking at ${new Date().toISOString()}`);
 
     // Book
     await hourBtn.click();
@@ -145,6 +161,23 @@ async function run() {
 
     if (!match) return console.log(`Nothing to do: no ${targetDay} row in the sheet`);
     console.log(`Target: ${match.day} at ${match.hour}`);
+
+    // The trigger fires at 23:55, but logging in then leaves the session idle ~4.5 min before 00:00,
+    // and the club may expire it. So wait until LOGIN_AT; prep takes ~15-60 s.
+    if (isBookingHour()) {
+      const now = new Date();
+      const [h, m, s] = now
+        .toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid" })
+        .split(":")
+        .map(Number);
+      const [lh, lm, ls] = LOGIN_AT.split(":").map(Number);
+      const msToLogin = Math.max(
+        0,
+        (lh! * 3600 + lm! * 60 + ls! - (h! * 3600 + m! * 60 + s!)) * 1000 - now.getMilliseconds(),
+      );
+      console.log(`Waiting ${(msToLogin / 1000).toFixed(1)}s until ${LOGIN_AT} to log in`);
+      await Bun.sleep(msToLogin);
+    }
     await book(match.hour);
   } catch (err) {
     console.error("Run failed:", err);
