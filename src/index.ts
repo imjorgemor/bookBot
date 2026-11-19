@@ -7,8 +7,16 @@ const { METRO_EMAIL, METRO_PASSWORD, SHEET_URL, PORT } = Bun.env as Record<
 >;
 const TIMEOUT = 15000;
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-// 00:00 opens today + 3 (Tue → Fri). We prep the night before, so +4 (Mon 23:55 → Fri).
-const DAYS_AHEAD = 4;
+// The club allows bookings up to 72 h ahead. The bot runs the night before 00:00,
+// so it books 3 days after that night. Night it runs (23:55) → day it books (sheet row):
+//   Monday    → Thursday
+//   Tuesday   → Friday
+//   Wednesday → Saturday
+//   Thursday  → Sunday
+//   Friday    → Monday
+//   Saturday  → Tuesday
+//   Sunday    → Wednesday
+const DAYS_AHEAD = 3;
 // Book this long after 00:00, in case the club's clock is slightly behind ours
 const MIDNIGHT_BUFFER_MS = 250;
 // Madrid time to start logging in, close to midnight so the session doesn't sit idle too long
@@ -157,7 +165,9 @@ async function run() {
         const [day = "", hour = ""] = line.split(",").map((cell) => cell.trim());
         return { day, hour };
       });
+
     const match = rows.find((r) => r.day.toLowerCase() === targetDay.toLowerCase());
+    console.log({ rows, match });
 
     if (!match) return console.log(`Nothing to do: no ${targetDay} row in the sheet`);
     console.log(`Target: ${match.day} at ${match.hour}`);

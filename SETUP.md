@@ -129,7 +129,7 @@ The bot sleeps all day (Serverless), and **nothing on Railway can wake it at a s
 
 ## Done 🎉
 
-- **23:55:** the timer wakes the bot. It checks the sheet for the day 4 days later (Monday night → Friday).
+- **23:55:** the timer wakes the bot. It checks the sheet for the day 3 days later (Thursday night → Sunday).
 - If there's a row, at **23:57:30** it logs in, finds the first free court at that hour, and waits (logging in later keeps the session fresh).
 - **00:00:** it books. You get the club's usual confirmation.
 - **To change what it books, just edit the sheet.**
