@@ -10,7 +10,9 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 // 00:00 opens today + 3 (Tue → Fri). We prep the night before, so +4 (Mon 23:55 → Fri).
 const DAYS_AHEAD = 4;
 // Book this long after 00:00, in case the club's clock is slightly behind ours
-const MIDNIGHT_BUFFER_MS = 250;
+const MIDNIGHT_BUFFER_MS = 350;
+// If the club still says "más de 72 horas" after midnight, keep retrying this long
+const RETRY_FOR_MS = 10000;
 // Madrid time to start logging in, close to midnight so the session doesn't sit idle too long
 const LOGIN_AT = "23:57:30";
 // Not needed to book: skip them to load pages faster
@@ -114,9 +116,28 @@ async function book(hour: string, daysAhead = DAYS_AHEAD, dryRun = false) {
     await Bun.sleep(msToMidnight);
     console.log(`Booking at ${new Date().toISOString()}`);
 
-    // Book
-    await hourBtn.click();
-    await page.click("#btnReserva", { timeout: TIMEOUT });
+    // Book. If the club still says "más de 72 horas" (not midnight yet on its side), it resets
+    // the calendar to today. Then: close the message, pick our date again, wait for its hours
+    // to load and click again, until the booking panel opens or RETRY_FOR_MS runs out.
+    const reserveBtn = page.locator("#btnReserva");
+    const tooEarly = page.locator('.swal-text:has-text("72 horas")');
+    const deadline = Date.now() + RETRY_FOR_MS;
+    for (let attempt = 1; ; attempt++) {
+      await hourBtn.click({ timeout: TIMEOUT });
+      await reserveBtn.or(tooEarly).first().waitFor({ state: "visible", timeout: TIMEOUT });
+      if (await reserveBtn.isVisible()) break;
+      console.log(`Try ${attempt} at ${new Date().toISOString()}: club says "72 horas"`);
+      if (Date.now() > deadline) throw new Error(`Still "72 horas" after ${attempt} tries`);
+      await page.locator(".swal-button").first().click({ timeout: TIMEOUT });
+      await tooEarly.waitFor({ state: "hidden", timeout: TIMEOUT });
+      // Remove the old hours, so we never click an hour of the wrong (reset) day
+      await page.locator(".hour-collapse").evaluateAll((els) => els.forEach((el) => el.remove()));
+      await dateField.click({ timeout: TIMEOUT });
+      await page.click(`td.day[data-day="${date}"]`, { timeout: TIMEOUT });
+      await page.waitForSelector(".hour-collapse", { timeout: TIMEOUT });
+    }
+    console.log(`Booking panel open at ${new Date().toISOString()}`);
+    await reserveBtn.click({ timeout: TIMEOUT });
     await page.click("#btnConfirmar", { timeout: TIMEOUT });
     await page.waitForSelector('.swal-text:has-text("Reserva gratuita realizada")', {
       timeout: TIMEOUT,
