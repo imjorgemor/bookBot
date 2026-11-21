@@ -1,6 +1,9 @@
 import { chromium } from "playwright";
+import { htmlSuccessEmail, plainTextSuccessEmail, successSubject } from "./email-templates";
+import { notify, userNumber } from "./notify";
 
 // Env vars. Each user's login is METRO_EMAIL_<n> / METRO_PASSWORD_<n>, n from the sheet ("jorge - 3").
+// Emails: see src/notify.ts.
 const { SHEET_URL, PORT } = Bun.env as Record<"SHEET_URL" | "PORT", string>;
 const TIMEOUT = 15000;
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -24,7 +27,14 @@ type Login = { email: string; password: string };
 
 // Book one court at hour "HH:MM", daysAhead days after today, clicking when it opens (opensAt, ms timestamp).
 // Without opensAt it's a dry run: only find the free court, never book.
-async function book(login: Login, hour: string, daysAhead: number, opensAt?: number) {
+// Returns what happened (message, plus the booked date "DD/MM/YYYY" and court); throws a short
+// reason if it failed.
+async function book(
+  login: Login,
+  hour: string,
+  daysAhead: number,
+  opensAt?: number,
+): Promise<{ message: string; date: string; pista: string }> {
   const browser = await chromium.launch({
     headless: true,
     args: ["--disable-gpu", "--disable-dev-shm-usage"], // no GPU; /dev/shm is tiny in Docker
@@ -101,8 +111,9 @@ async function book(login: Login, hour: string, daysAhead: number, opensAt?: num
     );
 
     if (opensAt === undefined) {
-      console.log(`Test OK: found free court ${date} ${hour} (${pista}). Not booking.`);
-      return;
+      const message = `Test OK: found free court ${date} ${hour} (${pista}). Not booking.`;
+      console.log(message);
+      return { message, date: date ?? "", pista };
     }
 
     // Wait until the court opens + buffer, to the millisecond. If it's already open, book now.
@@ -120,7 +131,9 @@ async function book(login: Login, hour: string, daysAhead: number, opensAt?: num
     await page.waitForSelector('.swal-text:has-text("Reserva gratuita realizada")', {
       timeout: TIMEOUT,
     });
-    console.log(`Booked ${date} ${hour} (${pista})`);
+    const message = `Booked ${date} ${hour} (${pista})`;
+    console.log(message);
+    return { message, date: date ?? "", pista };
   } catch (err) {
     console.error("Book failed:", err);
     // What the page shows instead (error message, captcha, other URL...)
@@ -133,6 +146,12 @@ async function book(login: Login, hour: string, daysAhead: number, opensAt?: num
     console.error(`Page text: ${text.replace(/\s+/g, " ").slice(0, 1000)}`);
     await page.screenshot({ path: "/tmp/fail.png", fullPage: true }).catch(() => {});
     process.exitCode = 1;
+    // Short reason for the email: the error's first line + what the club page says
+    const reason = String((err as Error)?.message ?? err).split("\n")[0];
+    const pageText = text.replace(/\s+/g, " ").trim().slice(-300);
+    throw new Error(`${reason}\nClub page: ${pageText || "(empty)"}\nAt: ${page.url()}`, {
+      cause: err,
+    });
   } finally {
     await browser.close();
   }
@@ -195,7 +214,7 @@ function nextOpening(now = Date.now()) {
 
 // User "jorge - 3" → METRO_EMAIL_3 / METRO_PASSWORD_3
 function loginFor(user: string): Login {
-  const n = user.split("-").pop()!.trim();
+  const n = userNumber(user);
   const email = Bun.env[`METRO_EMAIL_${n}`];
   const password = Bun.env[`METRO_PASSWORD_${n}`];
   if (!email || !password) {
@@ -245,10 +264,26 @@ async function run() {
     // Normally one row. If several users want the same court time, book them all at once.
     await Promise.all(
       matches.map(async (r) => {
+        const court = `${r.day} ${r.hour}`;
         try {
-          await book(loginFor(r.user), r.hour, next.daysAhead, next.opensAt);
+          const { date, pista } = await book(
+            loginFor(r.user),
+            r.hour,
+            next.daysAhead,
+            next.opensAt,
+          );
+          // Same email as the club's own confirmation, with the sheet user's name ("jorge - 3" → "jorge")
+          const vars = { name: r.user.split("-")[0]!.trim(), pista, date, hour: r.hour };
+          await notify(
+            r.user,
+            successSubject(vars),
+            plainTextSuccessEmail(vars),
+            htmlSuccessEmail(vars),
+          );
         } catch (err) {
-          console.error(`Book failed for ${r.user}:`, err);
+          const reason = (err as Error).message ?? String(err);
+          console.error(`Book failed for ${r.user}: ${reason}`);
+          await notify(r.user, `❌ Booking failed: ${court}`, reason);
         }
       }),
     );
@@ -262,13 +297,17 @@ function isJustBeforeOpening() {
   return nextOpening().opensAt - Date.now() <= MAX_WAIT_MS;
 }
 
-// Test: log in as user n and find a free court tomorrow at 07:00 (usually free), without booking
+// Test: log in as user n and find a free court tomorrow at 07:00 (usually free), without booking.
+// Also emails the result, so it checks the email setup too.
 const TEST_HOUR = "07:00";
 const test = async (n: string) => {
   try {
-    await book(loginFor(n), TEST_HOUR, 1);
+    const { message } = await book(loginFor(n), TEST_HOUR, 1);
+    await notify(n, "🧪 bookBot test OK", message);
   } catch (err) {
-    console.error("Test failed:", err);
+    const reason = (err as Error).message ?? String(err);
+    console.error(`Test failed: ${reason}`);
+    await notify(n, "🧪 bookBot test failed", reason);
   }
 };
 

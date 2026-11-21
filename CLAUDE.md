@@ -20,4 +20,5 @@ Every other hour the bot wakes at :57, finds no row and logs `Nothing to do`.
 - **Test:** `curl -s "$APP_URL/test?user=3"` (dry run as user 3: finds a free court tomorrow at 07:00, never books), then `railway logs --service bookbot --lines 30` and look for `Test OK`.
 - **Deploy:** push to `main` (Railway is connected to GitHub and builds the `Dockerfile`, Bun + Playwright Chromium). Don't use `railway up`.
 - Env vars live in Railway Variables: `SHEET_URL`, and per user n (from the sheet's `name - n`) `METRO_EMAIL_<n>` / `METRO_PASSWORD_<n>`. Never ask for, print or commit a password.
+- Emails (Resend, domain `paravosotrosjugadores.xyz`, sent from `bot@paravosotrosjugadores.xyz` unless `NOTIFY_FROM` is set): `RESEND_API_KEY`, and `NOTIFY_EMAIL_<n>` for each user who wants emails (commas for several). Only users 1 and 2 have one; user 3 gets none. A booking emails its user the club-style confirmation (`src/email-templates.ts`) or a ❌ failure; `/test` emails a short result too.
 - The booking flow works; don't change selectors or timing unless a log shows they broke.
